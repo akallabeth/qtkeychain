@@ -43,11 +43,10 @@ int main( int argc, char** argv ) {
         job.setAutoDelete( false );
         job.setKey( acc );
         job.setTextData( pass );
-        QEventLoop loop;
-        job.connect( &job, SIGNAL(finished(QKeychain::Job*)), &loop, SLOT(quit()) );
-        job.start();
-        loop.exec();
-     if ( job.error() ) {
+
+        job.execute();
+
+        if ( job.error() ) {
             std::cerr << "Storing password failed: " << qPrintable(job.errorString()) << std::endl;
             return 1;
         }
@@ -61,10 +60,7 @@ int main( int argc, char** argv ) {
         ReadPasswordJob job( QLatin1String("qtkeychain-testclient") );
         job.setAutoDelete( false );
         job.setKey( acc );
-        QEventLoop loop;
-        job.connect( &job, SIGNAL(finished(QKeychain::Job*)), &loop, SLOT(quit()) );
-        job.start();
-        loop.exec();
+        job.execute();
 
         const QString pw = job.textData();
         if ( job.error() ) {
@@ -81,10 +77,8 @@ int main( int argc, char** argv ) {
         DeletePasswordJob job( QLatin1String("qtkeychain-testclient") );
         job.setAutoDelete( false );
         job.setKey( acc );
-        QEventLoop loop;
-        job.connect( &job, SIGNAL(finished(QKeychain::Job*)), &loop, SLOT(quit()) );
-        job.start();
-        loop.exec();
+
+        job.execute();
 
         if ( job.error() ) {
             std::cerr << "Deleting password failed: " << qPrintable(job.errorString()) << std::endl;

@@ -13,6 +13,8 @@
 
 #include <QtCore/QObject>
 #include <QtCore/QString>
+#include <QWaitCondition>
+#include <QMutex>
 
 class QSettings;
 
@@ -40,13 +42,13 @@ class JobPrivate;
 class QKEYCHAIN_EXPORT Job : public QObject {
     Q_OBJECT
 public:
-    explicit Job( const QString& service, QObject* parent=0 );
     ~Job();
 
     QSettings* settings() const;
     void setSettings( QSettings* settings );
 
     void start();
+    void execute();
 
     QString service() const;
 
@@ -59,19 +61,27 @@ public:
     bool insecureFallback() const;
     void setInsecureFallback( bool insecureFallback );
 
-Q_SIGNALS:
-    void finished( QKeychain::Job* );
-
-protected:
-    Q_INVOKABLE virtual void doStart() = 0;
+    QString key() const;
+    void setKey(const QString &value);
 
     void setError( Error error );
     void setErrorString( const QString& errorString );
     void emitFinished();
     void emitFinishedWithError(Error, const QString& errorString);
 
-private:
+Q_SIGNALS:
+    void finished( QKeychain::Job* );
+
+protected:
+    explicit Job( const QString& service, JobPrivate *priv, QObject* parent=0 );
+
+protected:
     JobPrivate* const d;
+    QMutex m_mux;
+    QWaitCondition m_finished;
+
+friend class Job;
+friend class JobExecutor;
 };
 
 class ReadPasswordJobPrivate;
@@ -82,19 +92,11 @@ public:
     explicit ReadPasswordJob( const QString& service, QObject* parent=0 );
     ~ReadPasswordJob();
 
-    QString key() const;
-    void setKey( const QString& key );
-
     QByteArray binaryData() const;
     QString textData() const;
 
-protected:
-    void doStart();
-
 private:
     friend class QKeychain::ReadPasswordJobPrivate;
-    friend class QKeychain::JobExecutor;
-    ReadPasswordJobPrivate* const d;
 };
 
 class WritePasswordJobPrivate;
@@ -105,20 +107,12 @@ public:
     explicit WritePasswordJob( const QString& service, QObject* parent=0 );
     ~WritePasswordJob();
 
-    QString key() const;
-    void setKey( const QString& key );
-
     void setBinaryData( const QByteArray& data );
     void setTextData( const QString& data );
 
-protected:
-    void doStart();
-
 private:
-    friend class QKeychain::JobExecutor;
     friend class QKeychain::WritePasswordJobPrivate;
     friend class DeletePasswordJob;
-    WritePasswordJobPrivate* const d;
 };
 
 class DeletePasswordJobPrivate;
@@ -129,15 +123,8 @@ public:
     explicit DeletePasswordJob( const QString& service, QObject* parent=0 );
     ~DeletePasswordJob();
 
-    QString key() const;
-    void setKey( const QString& key );
-
-protected:
-    void doStart();
-
 private:
     friend class QKeychain::DeletePasswordJobPrivate;
-    DeletePasswordJobPrivate* const d;
 };
 
 } // namespace QtKeychain

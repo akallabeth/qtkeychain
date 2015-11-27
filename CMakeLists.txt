@@ -1,4 +1,5 @@
 cmake_minimum_required(VERSION 2.8)
+cmake_policy(SET CMP0020 NEW)
 project(qtkeychain)
 
 ###
@@ -13,6 +14,13 @@ include(GNUInstallDirs)
 
 option(BUILD_WITH_QT4 "Build qtkeychain with Qt4 no matter if Qt5 was found" OFF)
 
+if (WIN32)
+    option(USE_CREDENTIAL_STORE "Build with windows CredentialStore support" ON)
+
+    if (USE_CREDENTIAL_STORE)
+	add_definitions(-DUSE_CREDENTIAL_STORE=1)
+    endif()
+endif()
 
 if( NOT BUILD_WITH_QT4 )
     # try Qt5 first, and prefer that if found

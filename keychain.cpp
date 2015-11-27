@@ -11,9 +11,13 @@
 
 using namespace QKeychain;
 
-Job::Job( const QString& service, QObject *parent )
+Job::Job( const QString& service, JobPrivate *priv, QObject *parent )
     : QObject( parent )
-    , d ( new JobPrivate( service ) ) {
+    , d ( priv ) {
+}
+
+void Job::start() {
+    JobExecutor::instance()->enqueue( this );
 }
 
 Job::~Job() {
@@ -32,8 +36,12 @@ void Job::setSettings( QSettings* settings ) {
     d->settings = settings;
 }
 
-void Job::start() {
-    QMetaObject::invokeMethod( this, "doStart", Qt::QueuedConnection );
+void Job::execute() {
+    start();
+
+    // Wait for job to be processed...
+    QMutexLocker ml(&m_mux);
+    m_finished.wait(&m_mux);
 }
 
 bool Job::autoDelete() const {
@@ -54,6 +62,9 @@ void Job::setInsecureFallback( bool insecureFallback ) {
 
 void Job::emitFinished() {
     emit finished( this );
+    QMutexLocker ml(&m_mux);
+    m_finished.wakeAll();
+
     if ( d->autoDelete )
         deleteLater();
 }
@@ -62,6 +73,14 @@ void Job::emitFinishedWithError( Error error, const QString& errorString ) {
     d->error = error;
     d->errorString = errorString;
     emitFinished();
+}
+
+QString Job::key() const {
+    return d->key;
+}
+
+void Job::setKey(const QString &value) {
+    d->key = value;
 }
 
 Error Job::error() const {
@@ -81,12 +100,10 @@ void Job::setErrorString( const QString& errorString ) {
 }
 
 ReadPasswordJob::ReadPasswordJob( const QString& service, QObject* parent )
-    : Job( service, parent )
-    , d( new ReadPasswordJobPrivate( this ) )
+    : Job( service, new ReadPasswordJobPrivate( service, this ), parent )
 {}
 
 ReadPasswordJob::~ReadPasswordJob() {
-    delete d;
 }
 
 QString ReadPasswordJob::textData() const {
@@ -97,133 +114,99 @@ QByteArray ReadPasswordJob::binaryData() const {
     return d->data;
 }
 
-QString ReadPasswordJob::key() const {
-    return d->key;
-}
-
-void ReadPasswordJob::setKey( const QString& key ) {
-    d->key = key;
-}
-
-void ReadPasswordJob::doStart() {
-    JobExecutor::instance()->enqueue( this );
-}
-
 WritePasswordJob::WritePasswordJob( const QString& service, QObject* parent )
-    : Job( service, parent )
-    , d( new WritePasswordJobPrivate( this ) ) {
+    : Job( service, new WritePasswordJobPrivate( service, this ), parent ) {
 }
 
 WritePasswordJob::~WritePasswordJob() {
-    delete d;
-}
-
-QString WritePasswordJob::key() const {
-    return d->key;
-}
-
-void WritePasswordJob::setKey( const QString& key ) {
-    d->key = key;
 }
 
 void WritePasswordJob::setBinaryData( const QByteArray& data ) {
-    d->binaryData = data;
-    d->mode = WritePasswordJobPrivate::Binary;
+    WritePasswordJobPrivate *priv = dynamic_cast<WritePasswordJobPrivate*>(d);
+    priv->data = data;
 }
 
 void WritePasswordJob::setTextData( const QString& data ) {
-    d->textData = data;
-    d->mode = WritePasswordJobPrivate::Text;
-}
-
-void WritePasswordJob::doStart() {
-    JobExecutor::instance()->enqueue( this );
+    WritePasswordJobPrivate *priv = dynamic_cast<WritePasswordJobPrivate*>(d);
+    priv->data = data.toUtf8();
 }
 
 DeletePasswordJob::DeletePasswordJob( const QString& service, QObject* parent )
-    : Job( service, parent )
-    , d( new DeletePasswordJobPrivate( this ) ) {
+    : Job( service, new DeletePasswordJobPrivate( service, this ), parent ) {
 }
 
 DeletePasswordJob::~DeletePasswordJob() {
-    delete d;
 }
 
-void DeletePasswordJob::doStart() {
-    //Internally, to delete a password we just execute a write job with no data set (null byte array).
-    //In all current implementations, this deletes the entry so this is sufficient
-    WritePasswordJob* job = new WritePasswordJob( service(), this );
-    connect( job, SIGNAL(finished(QKeychain::Job*)), d, SLOT(jobFinished(QKeychain::Job*)) );
-    job->setInsecureFallback(true);
-    job->setSettings(settings());
-    job->setKey( d->key );
-    job->doStart();
-}
+DeletePasswordJobPrivate::DeletePasswordJobPrivate(const QString& service_, DeletePasswordJob* qq) :
+    JobPrivate(service_, qq)
+{
 
-QString DeletePasswordJob::key() const {
-    return d->key;
-}
-
-void DeletePasswordJob::setKey( const QString& key ) {
-    d->key = key;
-}
-
-void DeletePasswordJobPrivate::jobFinished( Job* job ) {
-    q->setError( job->error() );
-    q->setErrorString( job->errorString() );
-    q->emitFinished();
 }
 
 JobExecutor::JobExecutor()
-    : QObject( 0 )
-    , m_runningJob( 0 )
+    : QThread( 0 )
 {
+    m_ready.lock();
 }
 
 void JobExecutor::enqueue( Job* job ) {
-    m_queue.append( job );
-    startNextIfNoneRunning();
+    QMutexLocker ml(&m_mux);
+    m_queue.enqueue( job );
+    m_condition.wakeAll();
 }
 
-void JobExecutor::startNextIfNoneRunning() {
-    if ( m_queue.isEmpty() || m_runningJob )
-        return;
-    QPointer<Job> next;
-    while ( !next && !m_queue.isEmpty() ) {
-        next = m_queue.first();
-        m_queue.pop_front();
-    }
-    if ( next ) {
-        connect( next, SIGNAL(finished(QKeychain::Job*)), this, SLOT(jobFinished(QKeychain::Job*)) );
-        connect( next, SIGNAL(destroyed(QObject*)), this, SLOT(jobDestroyed(QObject*)) );
-        m_runningJob = next;
-        if ( ReadPasswordJob* rpj = qobject_cast<ReadPasswordJob*>( m_runningJob ) )
-            rpj->d->scheduledStart();
-        else if ( WritePasswordJob* wpj = qobject_cast<WritePasswordJob*>( m_runningJob) )
-            wpj->d->scheduledStart();
-    }
+bool JobExecutor::waitForReady() {
+    m_ready.lock();
+    return true;
 }
 
-void JobExecutor::jobDestroyed( QObject* object ) {
-    Q_UNUSED( object ) // for release mode
-    Q_ASSERT( object == m_runningJob );
-    m_runningJob->disconnect( this );
-    m_runningJob = 0;
-    startNextIfNoneRunning();
-}
+void JobExecutor::run() {
+    m_ready.unlock();
+    do {
+        QMutexLocker ml(&m_mux);
+        m_condition.wait(&m_mux);
 
-void JobExecutor::jobFinished( Job* job ) {
-    Q_UNUSED( job ) // for release mode
-    Q_ASSERT( job == m_runningJob );
-    m_runningJob->disconnect( this );
-    m_runningJob = 0;
-    startNextIfNoneRunning();
+        QPointer<Job> next;
+        while ( !next && !m_queue.isEmpty() ) {
+            next = m_queue.dequeue();
+        }
+        if ( next ) {
+            next->d->scheduledStart();
+        }
+    } while(!isInterruptionRequested());
 }
 
 JobExecutor* JobExecutor::s_instance = 0;
 
 JobExecutor* JobExecutor::instance() {
-    if ( !s_instance )
+    if ( !s_instance ) {
         s_instance = new JobExecutor;
+        s_instance->start();
+        s_instance->waitForReady();
+    }
     return s_instance;
+}
+
+ReadPasswordJobPrivate::ReadPasswordJobPrivate(const QString &service_, ReadPasswordJob *qq) :
+    JobPrivate(service_, qq),
+    walletHandle( 0 )
+{
+
+}
+
+WritePasswordJobPrivate::WritePasswordJobPrivate(const QString &service_, WritePasswordJob *qq) :
+    JobPrivate(service_, qq)
+{
+
+}
+
+JobPrivate::JobPrivate(const QString &service_, Job *qq)
+    : error( NoError )
+    , service( service_ )
+    , autoDelete( true )
+    , insecureFallback( false )
+    , q ( qq )
+{
+
 }
