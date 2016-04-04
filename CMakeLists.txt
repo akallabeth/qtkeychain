@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 2.8)
+cmake_minimum_required(VERSION 2.8.11)
 project(qtkeychain)
 
 include(FindPkgConfig)
@@ -9,6 +9,9 @@ set(QTKEYCHAIN_VERSION 0.5.90)
 set(QTKEYCHAIN_SOVERSION 0)
 
 ###
+if(WIN32)
+	set(CMAKE_DEBUG_POSTFIX "d")
+endif(WIN32)
 
 set(CMAKE_MODULE_PATH "${CMAKE_MODULE_PATH}" "${PROJECT_SOURCE_DIR}/cmake/Modules")
 include(GNUInstallDirs)
@@ -29,6 +32,7 @@ if( NOT BUILD_WITH_QT4 )
 endif()
 
 if (Qt5Core_FOUND)
+  message("Building with QT5")
   set(QTKEYCHAIN_VERSION_INFIX 5)
   if(UNIX AND NOT APPLE)
     find_package(Qt5DBus REQUIRED)
@@ -60,6 +64,7 @@ if (Qt5Core_FOUND)
     endif()
   endif()
 else()
+  message("Building with QT4")
   set(QTKEYCHAIN_VERSION_INFIX "")
   if(UNIX AND NOT APPLE)
     find_package(Qt4 COMPONENTS QtCore QtDBus REQUIRED)
@@ -82,7 +87,6 @@ else()
     qt4_wrap_cpp(${ARGN})
   endmacro()
 endif()
-
 
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
